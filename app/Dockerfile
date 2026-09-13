@@ -9,9 +9,10 @@ ENV TZ=Asia/Shanghai
 ENV RUNNING_IN_DOCKER=true
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# 替换为阿里云镜像源
-RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list 2>/dev/null || true && \
-    sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
+# 本地默认使用阿里云源；海外 CI 可选择 Debian 官方源。
+ARG APT_MIRROR=mirrors.aliyun.com
+RUN sed -i "s/deb.debian.org/${APT_MIRROR}/g" /etc/apt/sources.list 2>/dev/null || true && \
+    sed -i "s/deb.debian.org/${APT_MIRROR}/g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
 
 # 4. 安装 Python3、包管理器、Chromium、中文字体、Cron 以及图像处理底层库
 RUN apt-get update && apt-get install -y \

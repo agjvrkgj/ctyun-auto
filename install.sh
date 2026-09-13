@@ -6,6 +6,9 @@ INSTALL_DIR='/opt/ctyun-auto'
 BRANCH='main'
 DEPLOY_SCRIPT='deploy.sh'
 DOCKER_INSTALLER=''
+BUILD_ONLY=false
+CTYUN_IMAGE_MODE="${CTYUN_IMAGE_MODE:-pull}"
+CTYUN_IMAGE="${CTYUN_IMAGE:-}"
 
 log() { printf '[*] %s\n' "$*"; }
 die() { printf '[!] %s\n' "$*" >&2; exit 1; }
@@ -18,9 +21,15 @@ usage() {
   --dir PATH       项目安装目录，须为绝对路径（默认 /opt/ctyun-auto）
   --branch NAME    使用的仓库分支（默认 main）
   --cron           使用可自定义定时任务的 deploy_cron.sh
+  --build-only     仅本地构建镜像，不输入账号、不启动容器
+  --build          本地构建镜像后部署（显示完整构建日志）
+  --skip-build     使用本地已有镜像，跳过拉取和构建
+  --image NAME     指定镜像名或摘要
   -h, --help       显示帮助
 
-自动安装 Git、curl、证书及缺少的 Docker，下载项目后进入交互式部署。
+默认拉取 ghcr.io/agjvrkgj/ctyun-auto:latest 预构建镜像后进入交互式部署。
+本地构建/使用已有镜像时，默认镜像名为 ctyun-auto-sign:v1。
+自动安装 Git、curl、证书及缺少的 Docker。
 已有 Docker 不会重新安装；已有项目仅允许在干净的同名分支上快进更新。
 账号、密码和首次短信验证均在终端输入。
 EOF
@@ -29,15 +38,19 @@ EOF
 parse_args() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
-            --dir|--branch)
+            --dir|--branch|--image)
                 [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 缺少参数。"
                 case "$1" in
                     --dir) INSTALL_DIR="$2" ;;
                     --branch) BRANCH="$2" ;;
+                    --image) CTYUN_IMAGE="$2" ;;
                 esac
                 shift 2
                 ;;
             --cron) DEPLOY_SCRIPT='deploy_cron.sh'; shift ;;
+            --build-only) BUILD_ONLY=true; CTYUN_IMAGE_MODE=build; shift ;;
+            --build) CTYUN_IMAGE_MODE=build; shift ;;
+            --skip-build) CTYUN_IMAGE_MODE=local; shift ;;
             -h|--help) usage; exit 0 ;;
             *) die "未知选项: $1（使用 --help 查看帮助）。" ;;
         esac
@@ -45,6 +58,9 @@ parse_args() {
     [[ "$INSTALL_DIR" == /* && "$INSTALL_DIR" != / && "$INSTALL_DIR" != *$'\n'* ]] ||
         die '安装目录必须为非根目录的绝对路径。'
     [[ "$BRANCH" != -* && "$BRANCH" != *$'\n'* ]] || die '分支名称无效。'
+    if [ "$BUILD_ONLY" = true ] && [ "$CTYUN_IMAGE_MODE" != build ]; then
+        die '--build-only 不能和 --skip-build 同时使用。'
+    fi
 }
 
 prepare_terminal() {
@@ -145,7 +161,9 @@ main() {
     parse_args "$@"
     [ "$(uname -s)" = Linux ] || die '此脚本仅支持 Linux。'
     [ "$(id -u)" -eq 0 ] || die '请先执行 sudo -i 切换到 root，再运行本脚本。'
-    prepare_terminal
+    if [ "$BUILD_ONLY" != true ]; then
+        prepare_terminal
+    fi
     trap cleanup EXIT
     # 不打印失败命令，避免把后续交互输入的敏感信息写入日志。
     trap 'printf "[!] 一键部署失败（第 %s 行），请检查上方错误信息。\n" "$LINENO" >&2' ERR
@@ -153,6 +171,11 @@ main() {
     prepare_docker
     prepare_repository
     cd -- "$INSTALL_DIR"
+    export CTYUN_IMAGE_MODE CTYUN_IMAGE
+    if [ "$BUILD_ONLY" = true ]; then
+        bash ./build.sh
+        return
+    fi
     log "环境准备完成，开始运行 $DEPLOY_SCRIPT..."
     bash "./$DEPLOY_SCRIPT"
 }

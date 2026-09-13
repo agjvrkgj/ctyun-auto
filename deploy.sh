@@ -66,6 +66,10 @@ if [ ! -f "app/Dockerfile" ]; then
     exit 1
 fi
 
+# 先准备镜像，成功后再读取账号；拉取/构建失败不会影响已有容器。
+source ./scripts/image.sh
+prepare_ctyun_image
+
 # 2. 读取配置
 read -r -e -p "账号 (APP_USER): " APP_USER
 [ -z "$APP_USER" ] && {
@@ -98,10 +102,7 @@ done
 
 mkdir -p "$DATA_DIR"
 
-# 3. 构建镜像并清理同名容器
-echo -e "${YELLOW}[*] 正在构建镜像...${NC}"
-docker build -q -t ctyun-auto-sign:v1 ./app > /dev/null
-
+# 3. 检查并替换同名容器
 CONTAINER_NAME="ctyun_sign_${APP_USER}"
 EXISTING_CONTAINER=$(docker ps -aq -f "name=^${CONTAINER_NAME}$")
 if [ -n "$EXISTING_CONTAINER" ]; then
@@ -132,7 +133,7 @@ docker run -it \
   --add-host "deskcdn.ctyun.cn:106.120.187.154" \
   --add-host "deskcdn.ctyun.cn.ctadns.cn:106.120.187.154" \
   --restart unless-stopped \
-  ctyun-auto-sign:v1
+  "$CTYUN_IMAGE_ID"
 
 # 6. 脱离后的自动化首次任务
 echo -e "\n${YELLOW}[*] 检测到交互界面已退出，正在检查容器运行状态...${NC}"

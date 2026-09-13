@@ -30,6 +30,8 @@
 ```text
 .
 ├─ install.sh              # 一键部署入口（安装依赖、下载代码、调用部署脚本）
+├─ build.sh                # 只构建镜像，显示完整进度，不需要账号
+├─ scripts/image.sh        # 拉取预构建镜像 / 本地构建 / 复用本地镜像
 ├─ deploy.sh               # 交互式部署脚本（构建镜像、启动容器）
 ├─ deploy_cron.sh          # 带 cron 参数的部署脚本（可配置定时任务）
 └─ app/
@@ -58,7 +60,9 @@ apt-get update && apt-get install -y curl ca-certificates
 dnf install -y curl ca-certificates
 ```
 
-脚本会自动安装缺少的 Git、curl、CA 证书和 Docker，将本仓库下载到 `/opt/ctyun-auto`，然后引导输入账号、密码和数据目录，构建镜像并启动容器。密码输入不回显。已有 Docker 会直接复用；使用 systemd 的系统会尝试设置 Docker 开机启动。
+脚本会自动安装缺少的 Git、curl、CA 证书和 Docker，将本仓库下载到 `/opt/ctyun-auto`，**先拉取预构建镜像 `ghcr.io/agjvrkgj/ctyun-auto:latest`**，成功后才引导输入账号、密码和数据目录并启动容器。服务器不再默认编译镜像或安装 Chromium/Python 依赖。密码输入不回显。已有 Docker 会直接复用；使用 systemd 的系统会尝试设置 Docker 开机启动。
+
+预构建镜像需要下方的 GitHub Actions 首次发布成功，并将包设为 Public 后才能匿名下载。目前工作流构建 `linux/amd64` 镜像；其他架构请使用 `--build`，且仍须基础镜像和依赖支持该架构。拉取失败时会显示原始错误并退出，不会自动进入漫长的本地构建。
 
 依赖安装支持 `apt-get`、`dnf`、`yum`；自动安装 Docker 的系统与版本范围以 [Docker 官方安装脚本](https://github.com/docker/docker-install)为准。服务器需要能访问 GitHub、Docker 软件源及镜像仓库。整个应用的架构支持取决于基础镜像 `su3817807/ctyun:latest`。
 
@@ -70,6 +74,16 @@ bash "$HOME/ctyun-install.sh" --cron
 
 # 自定义项目目录和分支
 bash "$HOME/ctyun-install.sh" --dir /opt/ctyun-auto --branch main
+
+# 只在服务器本地构建镜像，不输入账号、不创建或重建容器
+bash "$HOME/ctyun-install.sh" --build-only
+
+# 上一步构建成功后，直接使用已有镜像部署
+bash "$HOME/ctyun-install.sh" --skip-build
+
+# 选择本地构建后部署，或指定预构建镜像标签/摘要
+bash "$HOME/ctyun-install.sh" --build
+bash "$HOME/ctyun-install.sh" --image ghcr.io/agjvrkgj/ctyun-auto:latest
 
 # 查看帮助
 bash "$HOME/ctyun-install.sh" --help
@@ -95,7 +109,35 @@ bash deploy.sh
 - `APP_PASSWORD`：密码
 - 数据目录：容器挂载目录（默认 `~/data`）
 
-脚本会构建镜像 `ctyun-auto-sign:v1` 并启动容器 `ctyun_sign_<APP_USER>`。
+脚本默认拉取预构建镜像并启动容器 `ctyun_sign_<APP_USER>`。`deploy.sh` 和 `deploy_cron.sh` 均支持通过环境变量选择镜像方式：
+
+```bash
+# 已克隆项目：单独构建，构建成功后再部署
+bash build.sh
+CTYUN_IMAGE_MODE=local bash deploy.sh
+
+# 本地构建后直接部署，或给定已有镜像名
+CTYUN_IMAGE_MODE=build bash deploy.sh
+CTYUN_IMAGE_MODE=local CTYUN_IMAGE=my-ctyun:v1 bash deploy.sh
+```
+
+本地构建默认标签为 `ctyun-auto-sign:v1`。日志会完整显示；以前停留在“正在构建镜像...”通常是因为旧脚本的 `docker build -q` 隐藏了下载和安装进度。现在可以直接查看是基础镜像下载、APT 软件源还是 pip 依赖安装在等待。
+
+### 在 GitHub 上提前构建镜像
+
+仓库的 [Build Docker image 工作流](https://github.com/agjvrkgj/ctyun-auto/actions/workflows/docker-image.yml)会在 `main` 的应用或部署文件变化时构建镜像，也可以在 Actions 页面点击 **Run workflow** 手动运行。工作流先检查部署脚本、构建并验证镜像依赖，再发布到 GHCR；构建无需天翼账号或密码。
+
+- `main` 发布 `ghcr.io/agjvrkgj/ctyun-auto:latest`。
+- `codex/prebuilt-image` 分支发布 `:preview` 供合并前验证，不覆盖 `:latest`。
+- 每次同时发布 `:sha-<完整提交 SHA>`，便于固定版本。
+- 首次发布后，仓库所有者需要进入 GitHub **Packages → ctyun-auto → Package settings → Change visibility → Public**，才能让服务器免登录拉取。GitHub 的容器包[首次发布默认为私有](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#pushing-container-images)。
+
+GitHub 构建使用 Debian 官方源，本地构建继续默认使用阿里云源。如需在本地改用官方源：
+
+```bash
+BUILDKIT_PROGRESS=plain docker build --build-arg APT_MIRROR=deb.debian.org -t ctyun-auto-sign:v1 ./app
+CTYUN_IMAGE_MODE=local bash deploy.sh
+```
 
 ## 首次运行说明
 

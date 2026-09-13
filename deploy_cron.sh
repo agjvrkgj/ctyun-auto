@@ -177,6 +177,10 @@ if [ ! -f "app/Dockerfile" ]; then
     exit 1
 fi
 
+# 先准备镜像，成功后再读取账号。
+source ./scripts/image.sh
+prepare_ctyun_image
+
 # 账号
 if [ -z "$APP_USER" ]; then
     read -r -e -p "账号（APP_USER）: " APP_USER
@@ -237,9 +241,6 @@ fi
 LOGIN_SCRIPT="$DEFAULT_LOGIN_SCRIPT"
 PC_SCRIPT="$DEFAULT_PC_SCRIPT"
 
-echo -e "${YELLOW}[*] 正在构建镜像...${NC}"
-docker build -q -t ctyun-auto-sign:v1 ./app >/dev/null
-
 CONTAINER_NAME="ctyun_sign_${APP_USER}"
 EXISTING_CONTAINER=$(docker ps -aq -f "name=^${CONTAINER_NAME}$")
 if [ -n "$EXISTING_CONTAINER" ]; then
@@ -272,7 +273,7 @@ docker run $DOCKER_TYPE \
   --add-host "deskcdn.ctyun.cn:106.120.187.154" \
   --add-host "deskcdn.ctyun.cn.ctadns.cn:106.120.187.154" \
   --restart unless-stopped \
-  ctyun-auto-sign:v1
+  "$CTYUN_IMAGE_ID"
 
 echo -e "\n${YELLOW}[*] 已退出交互界面，正在检查容器状态...${NC}"
 sleep 2
