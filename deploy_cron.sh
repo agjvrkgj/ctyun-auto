@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+# 允许从任意工作目录调用。
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
@@ -39,7 +42,7 @@ EOF
 
 expand_path() {
     local input="$1"
-    if [[ "$input" == ~* ]]; then
+    if [[ "$input" == '~' || "$input" == '~/'* ]]; then
         echo "${input/#\~/$HOME}"
     else
         echo "$input"
@@ -238,7 +241,15 @@ echo -e "${YELLOW}[*] 正在构建镜像...${NC}"
 docker build -q -t ctyun-auto-sign:v1 ./app >/dev/null
 
 CONTAINER_NAME="ctyun_sign_${APP_USER}"
-if [ "$(docker ps -aq -f name=^${CONTAINER_NAME}$)" ]; then
+EXISTING_CONTAINER=$(docker ps -aq -f "name=^${CONTAINER_NAME}$")
+if [ -n "$EXISTING_CONTAINER" ]; then
+    if [ "$AUTO_CONFIRM" != 'true' ]; then
+        read -r -p "容器 ${CONTAINER_NAME} 已存在，将替换容器（请先备份容器内未挂载的配置）。继续？[y/N]: " REPLACE_CONTAINER
+        case "$REPLACE_CONTAINER" in
+            y|Y|yes|YES) ;;
+            *) echo '已取消，原容器保持运行。'; exit 0 ;;
+        esac
+    fi
     docker rm -f "$CONTAINER_NAME" >/dev/null
 fi
 
@@ -252,10 +263,11 @@ if [ "$AUTO_CONFIRM" != 'true' ]; then
     read -r -p "按回车启动容器..."
     DOCKER_TYPE="-it"
 fi
+export APP_USER APP_PASSWORD
 docker run $DOCKER_TYPE \
   --name "$CONTAINER_NAME" \
-  -e APP_USER="$APP_USER" \
-  -e APP_PASSWORD="$APP_PASSWORD" \
+  -e APP_USER \
+  -e APP_PASSWORD \
   -v "$DATA_DIR":/app/data \
   --add-host "deskcdn.ctyun.cn:106.120.187.154" \
   --add-host "deskcdn.ctyun.cn.ctadns.cn:106.120.187.154" \
@@ -295,6 +307,7 @@ else
     echo -e "然后手动执行："
     echo -e "  docker exec -it ${CONTAINER_NAME} python3 ${LOGIN_SCRIPT}"
     echo -e "  docker exec -it ${CONTAINER_NAME} env PYTHONUNBUFFERED=1 python3 -u ${PC_SCRIPT}"
+    exit 1
 fi
 
 echo -e "\n${GREEN}[*] 部署完成。${NC}"
