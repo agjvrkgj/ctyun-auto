@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# 允许从任意工作目录调用。
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
@@ -64,13 +67,13 @@ if [ ! -f "app/Dockerfile" ]; then
 fi
 
 # 2. 读取配置
-read -e -p "账号 (APP_USER): " APP_USER
+read -r -e -p "账号 (APP_USER): " APP_USER
 [ -z "$APP_USER" ] && {
     echo -e "${RED}[!] 账号不能为空。${NC}"
     exit 1
 }
 
-read -e -p "密码 (APP_PASSWORD): " APP_PASSWORD
+read -r -s -p "密码 (APP_PASSWORD): " APP_PASSWORD
 echo ""
 [ -z "$APP_PASSWORD" ] && {
     echo -e "${RED}[!] 密码不能为空。${NC}"
@@ -78,14 +81,14 @@ echo ""
 }
 
 while true; do
-    read -e -p "数据目录 [留空默认 ~/data]: " INPUT_DIR
+    read -r -e -p "数据目录 [留空默认 ~/data]: " INPUT_DIR
     if [ -z "$INPUT_DIR" ]; then
         DATA_DIR="$HOME/data"
         break
     elif [[ "$INPUT_DIR" == /* ]]; then
         DATA_DIR="$INPUT_DIR"
         break
-    elif [[ "$INPUT_DIR" == ~* ]]; then
+    elif [[ "$INPUT_DIR" == '~' || "$INPUT_DIR" == '~/'* ]]; then
         DATA_DIR="${INPUT_DIR/#\~/$HOME}"
         break
     else
@@ -100,7 +103,13 @@ echo -e "${YELLOW}[*] 正在构建镜像...${NC}"
 docker build -q -t ctyun-auto-sign:v1 ./app > /dev/null
 
 CONTAINER_NAME="ctyun_sign_${APP_USER}"
-if [ "$(docker ps -aq -f name=^${CONTAINER_NAME}$)" ]; then
+EXISTING_CONTAINER=$(docker ps -aq -f "name=^${CONTAINER_NAME}$")
+if [ -n "$EXISTING_CONTAINER" ]; then
+    read -r -p "容器 ${CONTAINER_NAME} 已存在，将替换容器（请先备份容器内未挂载的配置）。继续？[y/N]: " REPLACE_CONTAINER
+    case "$REPLACE_CONTAINER" in
+        y|Y|yes|YES) ;;
+        *) echo '已取消，原容器保持运行。'; exit 0 ;;
+    esac
     docker rm -f "$CONTAINER_NAME" > /dev/null
 fi
 
@@ -111,13 +120,14 @@ echo -e "2.  ${GREEN}保活任务启动${NC} 后，请依次按 ${YELLOW}Ctrl+P$
 echo -e "   (如果误按 Ctrl+C 退出，请执行: docker start ${CONTAINER_NAME})"
 echo -e "===========================\n"
 
-read -p "确认后按【回车键】启动容器..."
+read -r -p "确认后按【回车键】启动容器..."
 
 # 5. 启动容器（该过程会占用终端，直到用户按 Ctrl+P、Ctrl+Q 脱离）
+export APP_USER APP_PASSWORD
 docker run -it \
   --name "$CONTAINER_NAME" \
-  -e APP_USER="$APP_USER" \
-  -e APP_PASSWORD="$APP_PASSWORD" \
+  -e APP_USER \
+  -e APP_PASSWORD \
   -v "$DATA_DIR":/app/data \
   --add-host "deskcdn.ctyun.cn:106.120.187.154" \
   --add-host "deskcdn.ctyun.cn.ctadns.cn:106.120.187.154" \
@@ -152,6 +162,7 @@ else
     echo -e "补救措施：请先执行 ${YELLOW}docker start ${CONTAINER_NAME}${NC} 重新启动容器。"
     echo -e "然后手动执行 ${YELLOW}docker exec -it ${CONTAINER_NAME} python3 /app/login_script.py${NC}。"
     echo -e "如需手动运行：${YELLOW}docker exec -it ${CONTAINER_NAME} env PYTHONUNBUFFERED=1 python3 -u /app/pc_login.py${NC}。"
+    exit 1
 fi
 
 # 7. 结束信息
