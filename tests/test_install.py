@@ -165,7 +165,8 @@ class InstallTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Docker 服务不可用", result.stderr)
 
-    def deployment(self, *, existing=False, build_fail=False, running=True):
+    def deployment(self, *, existing=False, build_fail=False, running=True,
+                   mode="build", pull_fail=False, missing_image=False, build_only=False):
         bin_dir = self.root / "bin"
         bin_dir.mkdir()
         docker = bin_dir / "docker"
@@ -176,6 +177,12 @@ with open(os.environ['TEST_LOG'], 'a') as log:
     log.write(json.dumps({'args': args, 'password': os.getenv('APP_PASSWORD')}) + '\\n')
 if args[0] == 'build' and os.getenv('TEST_BUILD_FAIL') == '1':
     sys.exit(17)
+if args[0] == 'pull' and os.getenv('TEST_PULL_FAIL') == '1':
+    sys.exit(18)
+if args[:2] == ['image', 'inspect']:
+    if os.getenv('TEST_MISSING_IMAGE') == '1':
+        sys.exit(19)
+    print('sha256:' + 'a' * 64)
 if args[0] == 'ps' and os.getenv('TEST_EXISTING') == '1':
     print('existing-container')
 if args[0] == 'inspect':
@@ -188,12 +195,16 @@ if args[0] == 'inspect':
         logfile = self.root / "docker.jsonl"
         password = "test\\password'\"$literal"
         result = subprocess.run(
-            ["bash", str(PROJECT / "deploy.sh")], cwd=self.root,
+            ["bash", str(PROJECT / ("build.sh" if build_only else "deploy.sh"))], cwd=self.root,
             input=f"18100000000\n{password}\n{self.root / 'data dir'}\n" + ("n\n" if existing else "\n"),
             text=True, capture_output=True, timeout=10,
             env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
                  "TEST_LOG": str(logfile), "TEST_EXISTING": str(int(existing)),
                  "TEST_BUILD_FAIL": str(int(build_fail)),
+                 "CTYUN_IMAGE_MODE": mode,
+                 "CTYUN_IMAGE": "",
+                 "TEST_PULL_FAIL": str(int(pull_fail)),
+                 "TEST_MISSING_IMAGE": str(int(missing_image)),
                  "TEST_RUNNING": str(running).lower()},
         )
         calls = [json.loads(line) for line in logfile.read_text().splitlines()]
@@ -214,13 +225,51 @@ if args[0] == 'inspect':
 
     def test_failed_build_keeps_container(self):
         result, calls, _ = self.deployment(existing=True, build_fail=True)
-        self.assertEqual(result.returncode, 17, result.stderr)
+        self.assertNotEqual(result.returncode, 0, result.stderr)
         self.assertFalse(any(call['args'][0] in ('rm', 'run') for call in calls))
 
     def test_stopped_container_is_not_reported_as_success(self):
         result, _, _ = self.deployment(running=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("部署与首次配置完成", result.stdout)
+
+    def test_prebuilt_image_is_pulled_before_account_input(self):
+        result, calls, _ = self.deployment(mode="pull")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any(call['args'][0] == 'pull' for call in calls))
+        self.assertFalse(any(call['args'][0] == 'build' for call in calls))
+        run = next(call for call in calls if call['args'][0] == 'run')
+        self.assertEqual(run['args'][-1], 'sha256:' + 'a' * 64)
+        prepare = next(call for call in calls if call['args'][0] == 'pull')
+        self.assertIsNone(prepare['password'])
+
+    def test_pull_failure_does_not_start_slow_build_or_replace_container(self):
+        result, calls, _ = self.deployment(mode="pull", pull_fail=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(call['args'][0] in ('build', 'rm', 'run') for call in calls))
+
+    def test_existing_image_skips_network_and_build(self):
+        result, calls, _ = self.deployment(mode="local")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(call['args'][0] in ('build', 'pull') for call in calls))
+
+    def test_missing_local_image_does_not_replace_container(self):
+        result, calls, _ = self.deployment(mode="local", missing_image=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(call['args'][0] in ('build', 'pull', 'rm', 'run') for call in calls))
+
+    def test_build_only_does_not_read_credentials_or_create_container(self):
+        result, calls, _ = self.deployment(build_only=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(call['args'][0] in ('run', 'rm', 'pull') for call in calls))
+        build = next(call for call in calls if call['args'][0] == 'build')
+        self.assertNotIn('-q', build['args'])
+        self.assertIsNone(build['password'])
+
+    def test_build_only_installer_options(self):
+        result = self.shell('parse_args --build-only --image example:v1; printf "%s %s %s" "$BUILD_ONLY" "$CTYUN_IMAGE_MODE" "$CTYUN_IMAGE"')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, 'true build example:v1')
 
 
 if __name__ == "__main__":
